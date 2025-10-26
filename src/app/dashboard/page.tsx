@@ -1,7 +1,7 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import { fetchTickets } from "@/lib/queries";
-import TicketCard from "@/components/TicketCard";
+import TicketCard from "@/components/ui/TicketCard";
 
 export default function Dashboard() {
   const { data: tickets, isLoading } = useQuery({
