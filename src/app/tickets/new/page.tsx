@@ -20,7 +20,8 @@ export default function CreateTicketPage() {
     async function fetchDevelopers() {
       const { data, error } = await supabaseBrowserClient
         .from("profiles")
-        .select("id, name, email")
+        // --- FIX 1: Removed 'email' from the select query ---
+        .select("id, name")
         .eq("role", "developer");
 
       if (!error && data) setDevelopers(data);
@@ -127,7 +128,8 @@ export default function CreateTicketPage() {
             <option value="">-- Select Developer --</option>
             {developers.map((dev) => (
               <option key={dev.id} value={dev.id}>
-                {dev.name || dev.email}
+                {/* --- FIX 2: Removed '|| dev.email' fallback --- */}
+                {dev.name}
               </option>
             ))}
           </select>
