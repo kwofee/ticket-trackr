@@ -72,10 +72,10 @@ export default function TicketCard({ ticket, profile }: { ticket: Ticket; profil
    * Developer: Finish the ticket -> use allowed DB value (e.g., 'returned')
    */
   const handleFinish = async () => {
-    if (!confirm("Mark this ticket as completed?")) return;
+    if (!confirm("Mark this ticket as closed?")) return;
     setIsLoading(true);
     // Use an allowed status from your DB. Change 'returned' if needed.
-    const { error } = await supabase.from("tickets").update({ status: "returned" }).eq("id", ticket.id);
+    const { error } = await supabase.from("tickets").update({ status: "closed" }).eq("id", ticket.id);
 
     if (error) {
       alert("Error finishing ticket: " + error.message);
