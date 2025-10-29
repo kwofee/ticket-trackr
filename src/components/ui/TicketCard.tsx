@@ -11,13 +11,17 @@ type Ticket = {
   title: string;
   description: string;
   status: string;
-  assigned_to: string;
+  assigned_to: string | null;
+  raised_by: string | null;
+  deadline?: string | null;
+  created_at?: string;
   // ... any other ticket properties
 };
 
 type Profile = {
   id: string;
-  role: string;
+  role?: string;
+  name?: string;
   // ... any other profile properties
 };
 
@@ -28,21 +32,29 @@ export default function TicketCard({ ticket, profile }: { ticket: Ticket; profil
 
   const [isLoading, setIsLoading] = useState(false);
 
-  // State for the "Suggest Changes" modal
+  // Developer modals / state
   const [showModal, setShowModal] = useState(false);
   const [suggestion, setSuggestion] = useState("");
 
-  // State for review modal
+  // Manager review modal state
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [suggestions, setSuggestions] = useState<any[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
 
-  // Check if the current user is the developer assigned to this ticket
+  // New: Details modal state (for manager and developer)
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [detailsLoading, setDetailsLoading] = useState(false);
+  const [ticketDetails, setTicketDetails] = useState<any | null>(null);
+  const [comments, setComments] = useState<any[]>([]);
+  const [commentsLoading, setCommentsLoading] = useState(false);
+
+  // Check role/assignment/status
   const isAssignedDeveloper = profile.id === ticket.assigned_to;
   const isTicketOpen = ticket.status === "open";
+  const isTicketInProgress = ticket.status === "in_progress";
 
   /**
-   * Developer action: Accept the ticket (sets in_progress)
+   * Developer: Accept the ticket -> in_progress
    */
   const handleAccept = async () => {
     setIsLoading(true);
@@ -50,6 +62,23 @@ export default function TicketCard({ ticket, profile }: { ticket: Ticket; profil
 
     if (error) {
       alert("Error accepting ticket: " + error.message);
+    } else {
+      queryClient.invalidateQueries({ queryKey: ["tickets"] });
+    }
+    setIsLoading(false);
+  };
+
+  /**
+   * Developer: Finish the ticket -> use allowed DB value (e.g., 'returned')
+   */
+  const handleFinish = async () => {
+    if (!confirm("Mark this ticket as completed?")) return;
+    setIsLoading(true);
+    // Use an allowed status from your DB. Change 'returned' if needed.
+    const { error } = await supabase.from("tickets").update({ status: "returned" }).eq("id", ticket.id);
+
+    if (error) {
+      alert("Error finishing ticket: " + error.message);
     } else {
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
     }
@@ -92,13 +121,12 @@ export default function TicketCard({ ticket, profile }: { ticket: Ticket; profil
     setIsLoading(false);
   };
 
-  // Fetch suggestions/comments for this ticket (used in the review modal)
+  // Fetch suggestions/comments for review modal (manager)
   const fetchSuggestions = async () => {
     setSuggestionsLoading(true);
     const { data, error } = await supabase
       .from("comments")
-      // If your Supabase relationship is configured you can fetch author name via profiles(name)
-      .select("id, content, user_id, created_at, profiles(name)")
+      .select("id, content, user_id, created_at")
       .eq("ticket_id", ticket.id)
       .order("created_at", { ascending: true });
 
@@ -106,49 +134,46 @@ export default function TicketCard({ ticket, profile }: { ticket: Ticket; profil
       console.error("Error loading suggestions:", error.message);
       setSuggestions([]);
     } else {
-      setSuggestions(data || []);
+      const rows = data || [];
+      const userIds = Array.from(new Set(rows.map((r: any) => r.user_id).filter(Boolean)));
+      if (userIds.length > 0) {
+        const { data: userProfiles } = await supabase.from("profiles").select("id, name").in("id", userIds);
+        const profileMap = (userProfiles || []).reduce((acc: any, p: any) => {
+          acc[p.id] = p;
+          return acc;
+        }, {});
+        setSuggestions(rows.map((r: any) => ({ ...r, author: profileMap[r.user_id] || null })));
+      } else {
+        setSuggestions(rows);
+      }
     }
     setSuggestionsLoading(false);
   };
 
-  // when review modal is opened, fetch suggestions
   useEffect(() => {
-    if (showReviewModal) {
-      fetchSuggestions();
-    }
+    if (showReviewModal) fetchSuggestions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showReviewModal]);
 
-  // Manager action: Accept a single suggestion and go to edit page
-  // Also remove that suggestion from the page and delete it from the DB
+  // Manager action: Accept a suggestion and go to edit page (delete comment and remove locally)
   const handleAcceptSuggestion = async (suggestionItem: any) => {
     if (!confirm("Accept this suggestion and open the edit screen?")) return;
     setIsLoading(true);
 
-    // Attempt to delete the comment from the database
-    const { error: deleteError } = await supabase.from("comments").delete().eq("id", suggestionItem.id);
-    if (deleteError) {
-      // If deletion fails, notify but proceed to remove from UI and navigate (optional)
-      alert("Warning: failed to delete suggestion from DB: " + deleteError.message);
-    }
-
-    // Remove locally so it's no longer visible immediately
+    await supabase.from("comments").delete().eq("id", suggestionItem.id);
     setSuggestions((prev) => prev.filter((s) => s.id !== suggestionItem.id));
 
-    // Navigate to edit page with suggestion in query so the manager can apply it
     const encoded = encodeURIComponent(suggestionItem.content || "");
-    // navigate (this will unmount the component)
     router.push(`/tickets/${ticket.id}/edit?suggestion=${encoded}&suggestionId=${suggestionItem.id}`);
 
     setIsLoading(false);
   };
 
-  // Manager action: Deny a suggestion (reopen the ticket) and remove it from the page + DB
+  // Manager action: Deny a suggestion (reopen the ticket) and delete comment + remove locally
   const handleDenySuggestion = async (suggestionItem: any) => {
     if (!confirm("Deny this suggestion and reopen the ticket?")) return;
     setIsLoading(true);
 
-    // Re-open the ticket (set status back to 'open')
     const { error: reopenError } = await supabase.from("tickets").update({ status: "open" }).eq("id", ticket.id);
     if (reopenError) {
       alert("Error reopening ticket: " + reopenError.message);
@@ -156,21 +181,99 @@ export default function TicketCard({ ticket, profile }: { ticket: Ticket; profil
       return;
     }
 
-    // Delete the suggestion/comment from the DB
     const { error: deleteError } = await supabase.from("comments").delete().eq("id", suggestionItem.id);
     if (deleteError) {
       alert("Error deleting suggestion from DB: " + deleteError.message);
-      // still attempt to remove from UI so manager doesn't keep seeing it
     } else {
-      // only invalidate tickets if the reopen succeeded (we did above)
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
     }
 
-    // Remove the denied suggestion from the visible list
     setSuggestions((prev) => prev.filter((s) => s.id !== suggestionItem.id));
-
     setIsLoading(false);
   };
+
+  // Fetch ticket details & comments for details modal (avoid ambiguous relationship joins)
+  const fetchTicketDetails = async () => {
+    setDetailsLoading(true);
+    try {
+      // 1) Fetch the ticket row without relationship joins
+      const { data: t, error: ticketError } = await supabase
+        .from("tickets")
+        .select("id, title, description, status, deadline, created_at, assigned_to, raised_by")
+        .eq("id", ticket.id)
+        .single();
+
+      if (ticketError || !t) {
+        console.error("Failed to load ticket details:", ticketError?.message || "no ticket");
+        setTicketDetails(null);
+        setDetailsLoading(false);
+        return;
+      }
+
+      // Prepare an object to hold details + fetched profile names
+      const details: any = { ...t };
+
+      // 2) If assigned_to present, fetch that profile
+      if (t.assigned_to) {
+        const { data: assignedProfile, error: assignedError } = await supabase
+          .from("profiles")
+          .select("id, name")
+          .eq("id", t.assigned_to)
+          .single();
+        if (!assignedError && assignedProfile) details.assigned_profile = assignedProfile;
+      }
+
+      // 3) If raised_by present, fetch that profile
+      if (t.raised_by) {
+        const { data: raisedProfile, error: raisedError } = await supabase
+          .from("profiles")
+          .select("id, name")
+          .eq("id", t.raised_by)
+          .single();
+        if (!raisedError && raisedProfile) details.raised_profile = raisedProfile;
+      }
+
+      setTicketDetails(details);
+
+      // 4) Fetch comments for the ticket and their authors
+      setCommentsLoading(true);
+      const { data: cdata, error: commentsError } = await supabase
+        .from("comments")
+        .select("id, content, user_id, created_at")
+        .eq("ticket_id", ticket.id)
+        .order("created_at", { ascending: true });
+
+      if (commentsError) {
+        console.error("Failed to load comments:", commentsError.message);
+        setComments([]);
+      } else {
+        const rows = cdata || [];
+        const userIds = Array.from(new Set(rows.map((r: any) => r.user_id).filter(Boolean)));
+        let profileMap: Record<string, any> = {};
+        if (userIds.length > 0) {
+          const { data: userProfiles } = await supabase.from("profiles").select("id, name").in("id", userIds);
+          profileMap = (userProfiles || []).reduce((acc: any, p: any) => {
+            acc[p.id] = p;
+            return acc;
+          }, {});
+        }
+        setComments(rows.map((r: any) => ({ ...r, author: profileMap[r.user_id] || null })));
+      }
+      setCommentsLoading(false);
+    } catch (err: any) {
+      console.error("Failed to load ticket details (unexpected):", err?.message || err);
+      setTicketDetails(null);
+      setComments([]);
+      setCommentsLoading(false);
+    } finally {
+      setDetailsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (showDetailsModal) fetchTicketDetails();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showDetailsModal]);
 
   return (
     <>
@@ -180,6 +283,7 @@ export default function TicketCard({ ticket, profile }: { ticket: Ticket; profil
           <h3 className="font-bold text-lg mb-2">{ticket.title}</h3>
           <p className="text-gray-600 text-sm mb-4">{ticket.description}</p>
         </div>
+
         <div className="flex items-center justify-between">
           {/* Status Badge */}
           <span
@@ -196,36 +300,69 @@ export default function TicketCard({ ticket, profile }: { ticket: Ticket; profil
             {ticket.status}
           </span>
 
-          {/* Manager-only: If ticket is in needs_review, show "Review Suggestions" */}
-          {profile.role === "manager" && ticket.status === "needs_review" && (
-            <button
-              onClick={() => setShowReviewModal(true)}
-              className="ml-4 bg-indigo-600 text-white px-3 py-1 rounded-md text-sm hover:bg-indigo-700"
-            >
-              Review Suggestions
-            </button>
-          )}
+          <div className="flex items-center">
+            {/* Manager-only: review button shown to managers when needs_review */}
+            {profile.role === "manager" && ticket.status === "needs_review" && (
+              <button
+                onClick={() => setShowReviewModal(true)}
+                className="ml-3 bg-indigo-600 text-white px-3 py-1 rounded-md text-sm hover:bg-indigo-700"
+              >
+                Review Suggestions
+              </button>
+            )}
+
+            {/* View Details: available to managers AND the assigned developer */}
+            {(profile.role === "manager" || isAssignedDeveloper) && (
+              <button
+                onClick={() => setShowDetailsModal(true)}
+                className="ml-3 bg-gray-800 text-white px-3 py-1 rounded-md text-sm hover:bg-gray-900"
+              >
+                View Details
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Developer-only action buttons (accept / suggest) */}
-        {isAssignedDeveloper && isTicketOpen && (
-          <div className="mt-4 pt-4 border-t border-gray-100 flex gap-2">
-            <button
-              onClick={handleAccept}
-              disabled={isLoading}
-              className="flex-1 bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-600 disabled:opacity-50"
-            >
-              {isLoading ? "Accepting..." : "Accept Ticket"}
-            </button>
-            <button
-              onClick={() => setShowModal(true)}
-              disabled={isLoading}
-              className="flex-1 bg-gray-200 text-gray-800 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-300 disabled:opacity-50"
-            >
-              Suggest Changes
-            </button>
-          </div>
-        )}
+        {/* Developer action buttons */}
+        <div className="mt-4 pt-4 border-t border-gray-100 flex gap-2">
+          {isAssignedDeveloper && isTicketOpen && (
+            <>
+              <button
+                onClick={handleAccept}
+                disabled={isLoading}
+                className="flex-1 bg-green-500 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-600 disabled:opacity-50"
+              >
+                {isLoading ? "Accepting..." : "Accept Ticket"}
+              </button>
+              <button
+                onClick={() => setShowModal(true)}
+                disabled={isLoading}
+                className="flex-1 bg-gray-200 text-gray-800 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-300 disabled:opacity-50"
+              >
+                Suggest Changes
+              </button>
+            </>
+          )}
+
+          {isAssignedDeveloper && isTicketInProgress && (
+            <>
+              <button
+                onClick={handleFinish}
+                disabled={isLoading}
+                className="flex-1 bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-800 disabled:opacity-50"
+              >
+                {isLoading ? "Finishing..." : "Finish Ticket"}
+              </button>
+              <button
+                onClick={() => setShowModal(true)}
+                disabled={isLoading}
+                className="flex-1 bg-gray-200 text-gray-800 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-300 disabled:opacity-50"
+              >
+                Suggest Changes
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Suggest Changes Modal (developer) */}
@@ -243,11 +380,7 @@ export default function TicketCard({ ticket, profile }: { ticket: Ticket; profil
                 required
               />
               <div className="mt-4 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-medium hover:bg-gray-300"
-                >
+                <button type="button" onClick={() => setShowModal(false)} className="bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-medium hover:bg-gray-300">
                   Cancel
                 </button>
                 <button type="submit" disabled={isLoading} className="bg-blue-600 text-white px-4 py-2 rounded-lg font-medium disabled:opacity-50">
@@ -284,7 +417,7 @@ export default function TicketCard({ ticket, profile }: { ticket: Ticket; profil
                       <div>
                         <p className="text-sm text-gray-700 whitespace-pre-wrap">{s.content}</p>
                         <p className="text-xs text-gray-500 mt-2">
-                          By: {s.profiles?.name || s.user_id} • {new Date(s.created_at).toLocaleString()}
+                          By: {s.author?.name || s.user_id} • {new Date(s.created_at).toLocaleString()}
                         </p>
                       </div>
                       <div className="flex flex-col gap-2 ml-4">
@@ -299,6 +432,90 @@ export default function TicketCard({ ticket, profile }: { ticket: Ticket; profil
                   </li>
                 ))}
               </ul>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Ticket Details Modal (manager + assigned developer) */}
+      {showDetailsModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center z-50 p-4 overflow-auto">
+          <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-3xl mt-12">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold">Ticket Details</h2>
+              <button onClick={() => setShowDetailsModal(false)} className="text-sm text-gray-600 hover:text-gray-800">
+                Close
+              </button>
+            </div>
+
+            {detailsLoading ? (
+              <p className="text-gray-500">Loading details...</p>
+            ) : !ticketDetails ? (
+              <p className="text-red-500">Could not load ticket details.</p>
+            ) : (
+              <>
+                <div className="mb-4">
+                  <h3 className="text-lg font-semibold">{ticketDetails.title || ticket.title}</h3>
+                  <p className="text-sm text-gray-600">{ticketDetails.description || ticket.description}</p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+                  <div className="p-4 bg-gray-50 rounded border border-gray-100">
+                    <p className="text-xs text-gray-500">Status</p>
+                    <p className="font-medium">{ticketDetails.status}</p>
+                  </div>
+                  <div className="p-4 bg-gray-50 rounded border border-gray-100">
+                    <p className="text-xs text-gray-500">Assigned to</p>
+                    <p className="font-medium">{ticketDetails.assigned_profile?.name || ticketDetails.assigned_to || "Unassigned"}</p>
+                  </div>
+                  <div className="p-4 bg-gray-50 rounded border border-gray-100">
+                    <p className="text-xs text-gray-500">Raised by</p>
+                    <p className="font-medium">{ticketDetails.raised_profile?.name || ticketDetails.raised_by || "Unknown"}</p>
+                  </div>
+                  <div className="p-4 bg-gray-50 rounded border border-gray-100">
+                    <p className="text-xs text-gray-500">Deadline</p>
+                    <p className="font-medium">{ticketDetails.deadline ? new Date(ticketDetails.deadline).toLocaleDateString() : "None"}</p>
+                  </div>
+                </div>
+
+                <div className="mb-4">
+                  <h4 className="font-semibold mb-2">Comments / Suggestions</h4>
+                  {commentsLoading ? (
+                    <p className="text-gray-500">Loading comments...</p>
+                  ) : comments.length === 0 ? (
+                    <p className="text-gray-500">No comments yet.</p>
+                  ) : (
+                    <ul className="space-y-3">
+                      {comments.map((c) => (
+                        <li key={c.id} className="p-3 bg-gray-50 rounded border border-gray-100">
+                          <p className="text-sm text-gray-700 whitespace-pre-wrap">{c.content}</p>
+                          <p className="text-xs text-gray-500 mt-1">
+                            By: {c.author?.name || c.user_id} • {new Date(c.created_at).toLocaleString()}
+                          </p>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <button onClick={() => setShowDetailsModal(false)} className="px-4 py-2 rounded border border-gray-200">
+                    Close
+                  </button>
+
+                  {/* Only managers can edit from details modal (keep edit restricted) */}
+                  {profile.role === "manager" && (
+                    <button
+                      onClick={() => {
+                        router.push(`/tickets/${ticket.id}/edit`);
+                      }}
+                      className="px-4 py-2 bg-blue-600 text-white rounded"
+                    >
+                      Edit Ticket
+                    </button>
+                  )}
+                </div>
+              </>
             )}
           </div>
         </div>
