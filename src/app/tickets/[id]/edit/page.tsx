@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { useRouter, useParams, useSearchParams } from "next/navigation";
 
@@ -49,10 +49,7 @@ export default function EditTicketPage() {
       setAssignedTo(ticket.assigned_to || "");
 
       // fetch developers for assign dropdown
-      const { data: devs } = await supabase
-        .from("profiles")
-        .select("id, name")
-        .eq("role", "developer");
+      const { data: devs } = await supabase.from("profiles").select("id, name").eq("role", "developer");
 
       if (devs) setDevelopers(devs);
       setLoading(false);
@@ -84,7 +81,7 @@ export default function EditTicketPage() {
       return;
     }
 
-    // Optionally mark the suggestion as resolved if suggestionId exists and you have such a column
+    // Optionally mark the suggestion as resolved in comments (if you have such a column)
     // Example (uncomment if 'resolved' column exists on comments):
     // if (suggestionId) {
     //   await supabase.from('comments').update({ resolved: true }).eq('id', suggestionId);
@@ -118,41 +115,22 @@ export default function EditTicketPage() {
       <form onSubmit={handleSave} className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-gray-700">Title</label>
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            className="border p-2 w-full rounded-md"
-            required
-          />
+          <input value={title} onChange={(e) => setTitle(e.target.value)} className="border p-2 w-full rounded-md" required />
         </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-700">Description</label>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            className="border p-2 w-full rounded-md"
-            rows={5}
-          />
+          <textarea value={description} onChange={(e) => setDescription(e.target.value)} className="border p-2 w-full rounded-md" rows={5} />
         </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-700">Deadline</label>
-          <input
-            type="date"
-            value={deadline || ""}
-            onChange={(e) => setDeadline(e.target.value)}
-            className="border p-2 w-full rounded-md"
-          />
+          <input type="date" value={deadline || ""} onChange={(e) => setDeadline(e.target.value)} className="border p-2 w-full rounded-md" />
         </div>
 
         <div>
           <label className="block text-sm font-medium text-gray-700">Assign to Developer</label>
-          <select
-            className="border p-2 w-full rounded-md"
-            value={assignedTo}
-            onChange={(e) => setAssignedTo(e.target.value)}
-          >
+          <select className="border p-2 w-full rounded-md" value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}>
             <option value="">-- Select Developer --</option>
             {developers.map((dev) => (
               <option key={dev.id} value={dev.id}>
@@ -163,18 +141,10 @@ export default function EditTicketPage() {
         </div>
 
         <div className="flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => router.push("/dashboard")}
-            className="px-4 py-2 rounded border border-gray-200"
-          >
+          <button type="button" onClick={() => router.push("/dashboard")} className="px-4 py-2 rounded border border-gray-200">
             Cancel
           </button>
-          <button
-            type="submit"
-            disabled={saving}
-            className="px-4 py-2 bg-blue-600 text-white rounded"
-          >
+          <button type="submit" disabled={saving} className="px-4 py-2 bg-blue-600 text-white rounded">
             {saving ? "Saving..." : "Save changes"}
           </button>
         </div>
